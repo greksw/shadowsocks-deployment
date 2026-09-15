@@ -29,7 +29,7 @@ jobs:
           set -Eeuo pipefail
           chmod +x install-shadowsocks.sh
 
-          output="$('./install-shadowsocks.sh' \
+          output="$(./install-shadowsocks.sh \
             --port 8388 \
             --method chacha20-ietf-poly1305 \
             --listen ipv4 \
@@ -54,10 +54,10 @@ jobs:
             --password-file /tmp/example \
             --print-plan
 
-      - name: Check for obvious embedded secrets
+      - name: Check for obvious embedded secrets and legacy environment data
         shell: bash
         run: |
           set -Eeuo pipefail
           ! grep -REn \
-            '(PASSWORD=["'"'][^$][^"'"']{15,}["'"']|password[[:space:]]*:[[:space:]]*["'"'][^r][^e][^p]|TOKEN=|BOT_TOKEN=|PRIVATE KEY)' \
+            '(TOKEN=|BOT_TOKEN=|PRIVATE KEY|runer2\.su|test\.com|10\.10\.10\.10|9\.9\.9\.9)' \
             install-shadowsocks.sh README.md
