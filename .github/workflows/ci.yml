@@ -1,0 +1,63 @@
+name: Shell CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Bash syntax
+        run: bash -n install-shadowsocks.sh
+
+      - name: ShellCheck
+        run: shellcheck install-shadowsocks.sh
+
+      - name: Validate plan output
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x install-shadowsocks.sh
+
+          output="$('./install-shadowsocks.sh' \
+            --port 8388 \
+            --method chacha20-ietf-poly1305 \
+            --listen ipv4 \
+            --generate-password \
+            --print-plan)"
+
+          grep -Fq 'port: 8388/tcp+udp' <<<"$output"
+          grep -Fq 'method: chacha20-ietf-poly1305' <<<"$output"
+          grep -Fq 'firewall changes: none' <<<"$output"
+          grep -Fq 'nginx/certbot changes: none' <<<"$output"
+
+      - name: Reject unsafe CLI values
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ! ./install-shadowsocks.sh --port 443 --generate-password --print-plan
+          ! ./install-shadowsocks.sh --port 70000 --generate-password --print-plan
+          ! ./install-shadowsocks.sh --method rc4-md5 --generate-password --print-plan
+          ! ./install-shadowsocks.sh --listen public --generate-password --print-plan
+          ! ./install-shadowsocks.sh \
+            --generate-password \
+            --password-file /tmp/example \
+            --print-plan
+
+      - name: Check for obvious embedded secrets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ! grep -REn \
+            '(PASSWORD=["'"'][^$][^"'"']{15,}["'"']|password[[:space:]]*:[[:space:]]*["'"'][^r][^e][^p]|TOKEN=|BOT_TOKEN=|PRIVATE KEY)' \
+            install-shadowsocks.sh README.md
