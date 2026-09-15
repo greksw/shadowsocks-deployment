@@ -20,8 +20,8 @@ PASSWORD_FILE=''
 GENERATE_PASSWORD=0
 START_SERVICE=0
 PRINT_PLAN=0
-PACKAGE_INSTALLED_BY_US=0
 DEFAULT_SERVICE_MASKED_BY_US=0
+DEFAULT_SERVICE_WAS_MASKED=0
 
 usage() {
     cat <<'EOF'
@@ -146,16 +146,19 @@ Shadowsocks deployment plan
 EOF
 }
 
-cleanup_mask() {
+restore_default_service_mask() {
     local rc=$?
-    if ((DEFAULT_SERVICE_MASKED_BY_US == 1)); then
+
+    if ((DEFAULT_SERVICE_MASKED_BY_US == 1 && DEFAULT_SERVICE_WAS_MASKED == 0)); then
         systemctl unmask "$DEFAULT_SERVICE" >/dev/null 2>&1 || true
     fi
     exit "$rc"
 }
-trap cleanup_mask EXIT HUP INT TERM
+trap restore_default_service_mask EXIT HUP INT TERM
 
 install_packages() {
+    local default_service_state
+
     if dpkg-query -W -f='${Status}' shadowsocks-libev 2>/dev/null | grep -q '^install ok installed$'; then
         if systemctl is-active --quiet "$DEFAULT_SERVICE" || systemctl is-enabled --quiet "$DEFAULT_SERVICE" 2>/dev/null; then
             fatal "Existing $DEFAULT_SERVICE is active or enabled. Refusing to take over an existing deployment."
@@ -166,18 +169,27 @@ install_packages() {
         return
     fi
 
-    log "Masking $DEFAULT_SERVICE during package installation."
-    systemctl mask "$DEFAULT_SERVICE" >/dev/null
-    DEFAULT_SERVICE_MASKED_BY_US=1
+    default_service_state=$(systemctl is-enabled "$DEFAULT_SERVICE" 2>/dev/null || true)
+    if [[ $default_service_state == 'masked' || $default_service_state == 'masked-runtime' ]]; then
+        DEFAULT_SERVICE_WAS_MASKED=1
+    fi
+
+    if ((DEFAULT_SERVICE_WAS_MASKED == 0)); then
+        log "Temporarily masking $DEFAULT_SERVICE during package installation."
+        systemctl mask "$DEFAULT_SERVICE" >/dev/null
+        DEFAULT_SERVICE_MASKED_BY_US=1
+    fi
 
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         shadowsocks-libev jq openssl
-    PACKAGE_INSTALLED_BY_US=1
 
     systemctl disable --now "$DEFAULT_SERVICE" >/dev/null 2>&1 || true
-    systemctl unmask "$DEFAULT_SERVICE" >/dev/null
-    DEFAULT_SERVICE_MASKED_BY_US=0
+
+    if ((DEFAULT_SERVICE_MASKED_BY_US == 1)); then
+        systemctl unmask "$DEFAULT_SERVICE" >/dev/null
+        DEFAULT_SERVICE_MASKED_BY_US=0
+    fi
 }
 
 create_service_identity() {
@@ -185,14 +197,18 @@ create_service_identity() {
         groupadd --system "$SERVICE_GROUP"
     fi
 
-    if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-        useradd \
-            --system \
-            --gid "$SERVICE_GROUP" \
-            --home-dir /nonexistent \
-            --shell /usr/sbin/nologin \
-            "$SERVICE_USER"
+    if id "$SERVICE_USER" >/dev/null 2>&1; then
+        [[ $(id -gn "$SERVICE_USER") == "$SERVICE_GROUP" ]] \
+            || fatal "Existing user $SERVICE_USER does not use expected primary group $SERVICE_GROUP."
+        return
     fi
+
+    useradd \
+        --system \
+        --gid "$SERVICE_GROUP" \
+        --home-dir /nonexistent \
+        --shell /usr/sbin/nologin \
+        "$SERVICE_USER"
 }
 
 render_config() {
